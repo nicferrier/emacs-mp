@@ -1,0 +1,35 @@
+= MP - multiprocessing with daemons =
+
+Emacs can't fork and it doesn't have threads (though threads are
+coming).
+
+Various attempts have been made to add concurrency to Emacs but this
+is mine.
+
+It uses let's you create daemons from Emacs with a single call.
+
+The daemon may then have Lisp forms sent to it, the Lisp forms are
+executed asynchronously. This is in contrast to Emacs' builtin
+{{{server-eval-at}}}, which is synchronous.
+
+The asynchrony is achieved through callbacks, though I intend to add a
+synchronous like interface on top using macros.
+
+The protocol used is Emacs' client protocol, so no special
+bootstrapping is needed to bring the daemon up to a point where it
+will serve.
+
+=== Todo ===
+
+//Add bootstrapping// - particularly I would like to be able to create a
+daemon that has the same packages as my existing Emacs instance. This
+seems doable like this:
+
+* boot the new daemon
+* symlink all packages from the existing ELPA to the new daemon
+* send package-initialize to the new daemon
+
+it //might// be necessary to create the ELPA directory before booting
+the daemon so that the initialization works first time when the daemon
+boots.
+
