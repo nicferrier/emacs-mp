@@ -98,18 +98,29 @@ the argument that is not relevant."
                        (:getsocket
                         (format "/tmp/emacs%d/%s"
                                 (user-uid) unique))
+                       (:kill (mp/send
+                               this-func
+                               '(kill-emacs)
+                               (lambda (data error)
+                                 (list data error))))
                        (:send
                         (destructuring-bind (form receiver) other
                           (mp/send this-func form receiver))))))))
       (setenv "HOME" saved-home))))
 
-(setq mptest (mp/start-daemon))
-(funcall mptest :send
-         '(progn (sleep-for 2) (* 10 15))
-         (lambda (data error)
-           (if error
-               (message "meh: %s" error)
-               (message "hurrah! %s" data))))
+(defun mp/testit ()
+  (let (mptest)
+    (unwind-protect
+         (progn
+           (setq mptest (mp/start-daemon))
+           (funcall mptest :send
+                    '(progn (sleep-for 2) (* 10 15))
+                    (lambda (data error)
+                      (if error
+                          (message "meh: %s" error)
+                          (message "hurrah! %s" data)))))
+      (when mptest
+        (funcall mptest :kill)))))
 
 (provide 'mp)
 
