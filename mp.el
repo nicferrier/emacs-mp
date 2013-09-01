@@ -30,6 +30,24 @@
 ;;; Code:
 
 (require 'server) ;; for sending data to the daemon
+(require 'noflet)
+
+(defun mp/parse-response (mp receiver proc data)
+  (funcall mp :debug "mp/send %s < [%s]" data proc)
+  (if (string-match "[\n]*\\(-[a-z]+\\) \\(.*\\)" data)
+      (case (intern (concat ":" (match-string 1 data)))
+        (:-emacs-pid t) ; no need to do anything - just an ack
+        (:-print
+         (let ((response
+                (read   
+                 (decode-coding-string
+                  (server-unquote-arg (match-string 2 data))
+                  'emacs-internal))))
+           (funcall mp :debug "mp/send response %s" response)
+           (if (eq :success (car response))
+               (funcall receiver (cadr response) nil)
+               ;; Else it's a failure
+               (funcall receiver nil (car response))))))))
 
 (defun mp/send (mp form receiver)
   "Async send FORM to daemon MP.
@@ -46,25 +64,17 @@ the argument that is not relevant."
           :remote (funcall mp :getsocket)
           :filter
           (lambda (proc data)
-            (when (funcall mp :getdebug)
-              (message "mp/send %s < [%s]" data proc))
-            (if (string-match "[\n]*\\(-[a-z]+\\) \\(.*\\)" data)
-                (case (intern (concat ":" (match-string 1 data)))
-                  (:-emacs-pid t) ; no need to do anything - just an ack
-                  (:-print
-                   (funcall
-                    receiver
-                    (read
-                     (decode-coding-string
-                      (server-unquote-arg (match-string 2 data))
-                      'emacs-internal)) nil)))))))
-        (data (format
-               "-eval %s\n"
-               (server-quote-arg (format "%S" form)))))
+            (mp/parse-response mp receiver proc data))))
+        (to-send
+         (format
+          "-eval %s\n"
+          (server-quote-arg
+           (format "%S" `(condition-case err
+                             (list :success ,form)
+                           (error err)))))))
     (when proc
-      (when (funcall mp :getdebug)
-        (message "sending [%s] to {%s}" data proc))
-      (process-send-string proc data))))
+      (funcall mp :debug "mp/send sending [%s] to {%s}" to-send proc)
+      (process-send-string proc to-send))))
 
 (defun mp/start-daemon  ()
   "Start an Emacs server process."
@@ -82,6 +92,7 @@ the argument that is not relevant."
                          unique (format "*%s*" unique)
                          emacs-bin args))
                  (state :starting)
+                 (debug t)
                  this-func)
              (set-process-sentinel
               this-proc (lambda (process state)
@@ -94,7 +105,13 @@ the argument that is not relevant."
                    (lambda (msg &rest other)
                      (case msg
                        (:getdir emacs-dir)
-                       (:getdebug t)
+                       (:getdebug debug)
+                       (:debug
+                        (when debug
+                          (message
+                           (replace-regexp-in-string
+                            "\n" "\\\\n"
+                            (apply 'format other)))))
                        (:getsocket
                         (format "/tmp/emacs%d/%s"
                                 (user-uid) unique))
@@ -107,6 +124,73 @@ the argument that is not relevant."
                         (destructuring-bind (form receiver) other
                           (mp/send this-func form receiver))))))))
       (setenv "HOME" saved-home))))
+
+
+(progn
+  ;; Sets up the mp remote error signal
+  (put :mp-remote-error
+       'error-conditions
+       '(error :mp :mp-remote-error :remote-error))
+  (put :mp-remote-error
+       'error-message
+       "a remote error occurred"))
+
+(defmacro mp> (channel result-procname bodyform &rest nextform)
+  "Execute BODYFORM on CHANNEL's process then execute NEXTFORM.
+
+The BODYFORM is executed in another Emacs process.  When it
+completes NEXTFORM is executed.  Within NEXTFORM a call to
+RESULT-PROCNAME will return either the data resulting from
+BODYFORM or raise a `:mp-remote-error'.  In this way NEXTFORM can
+capture errors raised from the remote naturally.
+
+NEXTFORM is wrapped in an implicit `condition-case' to respond to
+`:mp-remote-error' whenever it is thrown, so a handler can defer to
+the default handling of `:mp-remote-error'."
+  (declare (indent 3))
+  (let ((datav (make-symbol "data"))
+        (errv (make-symbol "err"))
+        (remote-errv (make-symbol "remoterr")))
+    `(funcall
+      channel :send (quote ,bodyform)
+      (lambda (,datav ,errv)
+        (condition-case default-remote-err
+            (cl-flet ((,result-procname
+                       nil
+                       (if (,errv)
+                           (signal :mp-remote-error ,errv)
+                           ,datav)))
+              ,@nextform)
+          (:mp-remote-error
+           (funcall channel :debug "there was a remote error %s" err)))))))
+
+(defun mp/testit2 ()
+  (let (mptest)
+    (progn
+      (setq mptest (mp/start-daemon))
+      (mp> mptest remote
+          (progn (sleep-for 2) (* 10 15))
+        (unwind-protect
+             (condition-case err
+                 (message "hurrah! %s" (remote))
+               (:remote-error (message "whoops! %s" err))
+               (t 
+                (message "meh: %s" err)))
+          (funcall mptest :kill)))))
+
+(defun mp/test-divide-by-zero ()
+  (let (mptest)
+    (unwind-protect
+         (progn
+           (setq mptest (mp/start-daemon))
+           (sleep-for 2)
+           (funcall mptest :send
+                    '(progn (sleep-for 2) (/ 1 0))
+                    (lambda (data error)
+                      (if error
+                          (message "meh: %s" error)
+                          (message "hurrah! %s" data))
+                      (funcall mptest :kill)))))))
 
 (defun mp/testit ()
   (let (mptest)
