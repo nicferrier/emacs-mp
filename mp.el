@@ -147,7 +147,9 @@ capture errors raised from the remote naturally.
 NEXTFORM is wrapped in an implicit `condition-case' to respond to
 `:mp-remote-error' whenever it is thrown, so a handler can defer to
 the default handling of `:mp-remote-error'."
-  (declare (indent 3))
+  (declare
+   (debug (sexp sexp form &rest form))
+   (indent 3))
   (let ((datav (make-symbol "data"))
         (errv (make-symbol "err"))
         (remote-errv (make-symbol "remoterr")))
@@ -155,56 +157,44 @@ the default handling of `:mp-remote-error'."
       channel :send (quote ,bodyform)
       (lambda (,datav ,errv)
         (condition-case default-remote-err
-            (cl-flet ((,result-procname
-                       nil
-                       (if (,errv)
-                           (signal :mp-remote-error ,errv)
-                           ,datav)))
+            (nolexflet ((,result-procname ()
+                          (if ,errv
+                              (signal :mp-remote-error (list ,errv))
+                              ,datav)))
               ,@nextform)
           (:mp-remote-error
            (funcall channel :debug "there was a remote error %s" err)))))))
 
-(defun mp/testit2 ()
-  (let (mptest)
-    (progn
-      (setq mptest (mp/start-daemon))
-      (mp> mptest remote
-          (progn (sleep-for 2) (* 10 15))
-        (unwind-protect
-             (condition-case err
-                 (message "hurrah! %s" (remote))
-               (:remote-error (message "whoops! %s" err))
-               (t 
-                (message "meh: %s" err)))
-          (funcall mptest :kill)))))
+(defmacro with-mp (var &rest form)
+  "Bind VAR a handle to another process and then eval FORM.
 
-(defun mp/test-divide-by-zero ()
-  (let (mptest)
-    (unwind-protect
-         (progn
-           (setq mptest (mp/start-daemon))
-           (sleep-for 2)
-           (funcall mptest :send
-                    '(progn (sleep-for 2) (/ 1 0))
-                    (lambda (data error)
-                      (if error
-                          (message "meh: %s" error)
-                          (message "hurrah! %s" data))
-                      (funcall mptest :kill)))))))
+When FORM completes or exits, kill the process bound to VAR."
+  (declare
+   (debug (sexp &rest form))
+   (indent 1))
+  `(let ((,var (mp/start-daemon)))
+     (unwind-protect
+          (progn
+            (sleep-for 5)
+            ,@form)
+       (funcall ,var :kill))))
 
 (defun mp/testit ()
-  (let (mptest)
-    (unwind-protect
-         (progn
-           (setq mptest (mp/start-daemon))
-           (funcall mptest :send
-                    '(progn (sleep-for 2) (* 10 15))
-                    (lambda (data error)
-                      (if error
-                          (message "meh: %s" error)
-                          (message "hurrah! %s" data)))))
-      (when mptest
-        (funcall mptest :kill)))))
+  "Crude test of the macros."
+  (with-mp channel
+    (mp> channel remote
+        (progn (sleep-for 2) (* 10 15))
+      (message "hurrah! %s" (remote)))
+    (sleep-for 10)))
+
+(defun mp/test-divide-by-zero ()
+  (with-mp channel
+    (mp> channel remote
+        (progn (sleep-for 2) (/ 1 0))
+      (condition-case err
+          (message "hurrah! %s" (remote))
+        (:mp-remote-error (message "whoops! divide by 0"))))
+    (sleep-for 10)))
 
 (provide 'mp)
 
