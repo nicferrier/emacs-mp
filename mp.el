@@ -152,18 +152,20 @@ the default handling of `:mp-remote-error'."
    (indent 3))
   (let ((datav (make-symbol "data"))
         (errv (make-symbol "err"))
-        (remote-errv (make-symbol "remoterr")))
+        (default-errv (make-symbol "defaulterrv")))
     `(funcall
       channel :send (quote ,bodyform)
       (lambda (,datav ,errv)
-        (condition-case default-remote-err
+        (condition-case ,default-errv
             (nolexflet ((,result-procname ()
                           (if ,errv
                               (signal :mp-remote-error (list ,errv))
                               ,datav)))
               ,@nextform)
           (:mp-remote-error
-           (funcall channel :debug "there was a remote error %s" err)))))))
+           (funcall
+            channel :debug
+            "there was a remote error %s" ,default-errv)))))))
 
 (defmacro with-mp (var &rest form)
   "Bind VAR a handle to another process and then eval FORM.
