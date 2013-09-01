@@ -12,8 +12,20 @@ The daemon may then have Lisp forms sent to it, the Lisp forms are
 executed asynchronously. This is in contrast to Emacs' builtin
 {{{server-eval-at}}}, which is synchronous.
 
-The asynchrony is achieved through callbacks, though I intend to add a
-synchronous like interface on top using macros.
+The asynchrony is achieved through callbacks, though there's also a
+lexical macro interface:
+
+{{{
+(with-mp channel
+    (mp> channel remote
+        (progn (sleep-for 2) (* 10 15))
+      (message "hurrah! %s" (remote)))
+    (sleep-for 10))
+}}}
+
+I'm currently working on a better synchronization solution than
+{{{sleep-for}}}.
+
 
 The protocol used is Emacs' client protocol, so no special
 bootstrapping is needed to bring the daemon up to a point where it
